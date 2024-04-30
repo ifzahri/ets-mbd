@@ -1,84 +1,101 @@
--- View yang menampilkan mahasiswa dan UMKM yang dibantunya:
-CREATE VIEW BantuUMKM AS
-SELECT M.Nama AS Mahasiswa, U.Nama AS UMKM
-FROM Mahasiswa M
-JOIN UMKM U ON M.UMKM_ID = U.UMKM_ID;
+-- Buatlah view yang menampilkan mahasiswa dan UMKM yang dibantunya.
+CREATE VIEW Mahasiswa_UMKM AS
+SELECT Mahasiswa.Mahasiswa_ID, Mahasiswa.Nama, UMKM.Nama AS Nama_UMKM
+FROM Mahasiswa
+JOIN UMKM ON Mahasiswa.UMKM_ID = UMKM.UMKM_ID;
 
--- View yang menampilkan nama mahasiswa dan jumlah UMKM yang pengajuan sertifikasinya "mendaftar", "Diterima", dan "Ditolak":
-CREATE VIEW JumlahPengajuanSertifikasi AS
-SELECT M.Nama AS Mahasiswa, 
-       COUNT(CASE WHEN PS.StatusPengajuan = 'Mendaftar' THEN 1 END) AS JumlahMendaftar,
-       COUNT(CASE WHEN PS.StatusPengajuan = 'Diterima' THEN 1 END) AS JumlahDiterima,
-       COUNT(CASE WHEN PS.StatusPengajuan = 'Ditolak' THEN 1 END) AS JumlahDitolak
-FROM Mahasiswa M
-JOIN AktivitasMahasiswa AM ON M.Mahasiswa_ID = AM.Mahasiswa_ID
-JOIN PengajuanSertifikasi PS ON AM.Mahasiswa_ID = PS.PengajuanSertifikasi_ID
-GROUP BY M.Nama;
+-- Buatlah view yang menampilkan nama mahasiswa dan jumlah UMKM yang pengajuan sertifikasinya “mendaftar”, “Diterima”, dan “Ditolak”
+CREATE VIEW Mahasiswa_PengajuanSertifikasi AS
+SELECT m.Nama AS Mahasiswa, 
+       COUNT(ps.PengajuanSertifikasi_ID) FILTER (WHERE ps.StatusPengajuan = 'Mendaftar') AS Mendaftar,
+       COUNT(ps.PengajuanSertifikasi_ID) FILTER (WHERE ps.StatusPengajuan = 'Diterima') AS Diterima,
+       COUNT(ps.PengajuanSertifikasi_ID) FILTER (WHERE ps.StatusPengajuan = 'Ditolak') AS Ditolak
+FROM Mahasiswa m
+JOIN PengajuanSertifikasi_Mahasiswa psm ON m.Mahasiswa_ID = psm.Mahasiswa_ID
+JOIN PengajuanSertifikasi ps ON psm.PengajuanSertifikasi_ID = ps.PengajuanSertifikasi_ID
+GROUP BY m.Nama;
 
--- Tabel baru "LogVerifikasi" dengan autoincrement pada ID log:
--- Tabel LogVerifikasi
+-- Buatlah sebuah tabel baru bernama Log Verifikasi. Tabel ini perlu menyimpan data ID log, ID Aktivitas, status verifikasi lama, status verifikasi baru, ID koordinator, dan timestamp. Buatlah sequence untuk membuat autoincrement pada ID log.
 CREATE TABLE LogVerifikasi (
-    Log_ID SERIAL PRIMARY KEY,
-    AktivitasMahasiswa_ID INT REFERENCES AktivitasMahasiswa(AktivitasMahasiswa_ID),
+    LogVerifikasi_ID SERIAL PRIMARY KEY,
+    AktivitasMahasiswa_ID UUID REFERENCES AktivitasMahasiswa(AktivitasMahasiswa_ID),
+    Koordinator_ID UUID REFERENCES Koordinator(Koordinator_ID),
     StatusVerifikasiLama VARCHAR(3),
     StatusVerifikasiBaru VARCHAR(3),
-    Koordinator_ID INT REFERENCES Koordinator(Koordinator_ID),
     Timestamp TIMESTAMP
 );
--- Sequence untuk ID log
-CREATE SEQUENCE LogVerifikasi_ID_Sequence;
 
--- Trigger pada tabel LogVerifikasi untuk menyimpan log perubahan kolom status verifikasi pada tabel AktivitasMahasiswa:
-CREATE OR REPLACE FUNCTION LogVerifikasiTriggerFunction()
+CREATE SEQUENCE LogVerifikasi_ID_seq;
+
+-- Terapkan trigger pada tabel log verifikasi yang akan menyimpan log perubahan kolom status verifikasi pada tabel Aktivitas Mahasiswa.
+CREATE OR REPLACE FUNCTION log_verifikasi_trigger()
 RETURNS TRIGGER AS $$
 BEGIN
-    INSERT INTO LogVerifikasi (AktivitasMahasiswa_ID, StatusVerifikasiLama, StatusVerifikasiBaru, Koordinator_ID, Timestamp)
-    VALUES (OLD.AktivitasMahasiswa_ID, OLD.Verifikasi, NEW.Verifikasi, NEW.Koordinator_ID, NOW());
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-CREATE TRIGGER LogVerifikasiTrigger
-AFTER UPDATE ON AktivitasMahasiswa
-FOR EACH ROW
-EXECUTE FUNCTION LogVerifikasiTriggerFunction();
-
--- INSTEAD OF trigger untuk menambahkan data melalui view "BantuUMKM":
-CREATE OR REPLACE FUNCTION BantuUMKMTriggerFunction()
-RETURNS TRIGGER AS $$
-BEGIN
-    IF NEW.Mahasiswa IS NOT NULL AND NEW.UMKM IS NOT NULL THEN
-        INSERT INTO Mahasiswa (Nama, UMKM_ID)
-        VALUES (NEW.Mahasiswa, (SELECT UMKM_ID FROM UMKM WHERE Nama = NEW.UMKM));
+    IF OLD.Verifikasi <> NEW.Verifikasi THEN
+        INSERT INTO LogVerifikasi (AktivitasMahasiswa_ID, StatusVerifikasiLama, StatusVerifikasiBaru, Koordinator_ID)
+        VALUES (NEW.AktivitasMahasiswa_ID, OLD.Verifikasi, NEW.Verifikasi, NEW.Koordinator_ID);
     END IF;
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
-CREATE TRIGGER BantuUMKMTrigger
-INSTEAD OF INSERT ON BantuUMKM
+CREATE TRIGGER log_verifikasi
+AFTER UPDATE ON AktivitasMahasiswa
 FOR EACH ROW
-EXECUTE FUNCTION BantuUMKMTriggerFunction();
+EXECUTE FUNCTION log_verifikasi_trigger();
 
--- Procedure untuk mengganti semua value "Menunggu" menjadi "Ditolak" pada kolom status di tabel PengajuanSertifikasi bila sudah lebih dari 6 bulan semenjak sertifikasi diajukan:
-CREATE OR REPLACE PROCEDURE UpdateStatusPengajuanSertifikasi()
+-- Buat test data untuk memastikan trigger berjalan dengan baik.
+UPDATE AktivitasMahasiswa SET Verifikasi = 'ACC' WHERE AktivitasMahasiswa_ID = '83484b40-ec3a-48d4-a69f-c1444141a62c';
+
+-- Buatlah INSTEAD OF trigger untuk menambahkan data melalui view pada soal no. 1.
+CREATE OR REPLACE FUNCTION insert_mahasiswa_umkm()
+RETURNS TRIGGER AS $$
+BEGIN
+    INSERT INTO Mahasiswa (Mahasiswa_ID, UMKM_ID, Nama)
+    VALUES (NEW.Mahasiswa_ID, (SELECT UMKM_ID FROM UMKM WHERE Nama = NEW.nama_umkm), NEW.nama);
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER insert_mahasiswa_umkm_trigger
+INSTEAD OF INSERT ON Mahasiswa_UMKM
+FOR EACH ROW
+EXECUTE FUNCTION insert_mahasiswa_umkm();
+
+-- De;ete function on insert_mahasiswa_umkm and trigger on insert_mahasiswa_umkm_trigger
+DROP FUNCTION insert_mahasiswa_umkm();
+DROP TRIGGER insert_mahasiswa_umkm_trigger;
+
+-- Buat test data untuk memastikan trigger berjalan dengan baik.
+INSERT INTO Mahasiswa_UMKM (Mahasiswa_ID, nama, Nama_UMKM) VALUES ('c7cbb815-1cc1-41e7-86ce-d36057c8260c', 'Anthony', 'UMKM F');
+
+-- Buatlah procedure yang mengganti semua value "Menunggu" menjadi "Ditolak" pada kolom status di tabel Pengajuan Sertifikasi bila sudah lebih dari 6 bulan semenjak sertifikasi diajukan.
+CREATE OR REPLACE PROCEDURE update_pengajuan_sertifikasi()
 LANGUAGE plpgsql
 AS $$
 BEGIN
     UPDATE PengajuanSertifikasi
     SET StatusPengajuan = 'Ditolak'
-    WHERE StatusPengajuan = 'Menunggu' AND TanggalPengajuan <= CURRENT_DATE - INTERVAL '6 months';
+    WHERE StatusPengajuan = 'Mendaftar' AND TanggalPengajuan <= (current_date - interval '6 months');
+    COMMIT;
 END;
 $$;
 
--- Fungsi perhitungan Insentif mahasiswa:
-CREATE OR REPLACE FUNCTION CalculateIncentive()
-RETURNS TABLE (Mahasiswa VARCHAR(50), Insentif INT) AS $$
+-- Jalankan procedurenya
+CALL update_pengajuan_sertifikasi();
+
+-- Buat fungsi perhitungan Insentif mahasiswa dimana insentif sebesar Rp50.000 diberikan per aktivitas yang sudah diverifikasi. Gunakan fungsi tersebut pada query untuk menampilkan daftar mahasiswa dan jumlah insentifnya.
+CREATE OR REPLACE FUNCTION bigint_insentif()
+RETURNS TABLE (Mahasiswa VARCHAR(50), Insentif BIGINT) AS $$
 BEGIN
     RETURN QUERY
-    SELECT M.Nama, COUNT(AM.Verifikasi) * 50000 AS Insentif
-    FROM Mahasiswa M
-    JOIN AktivitasMahasiswa AM ON M.Mahasiswa_ID = AM.Mahasiswa_ID
-    WHERE AM.Verifikasi = 'ACC'
-    GROUP BY M.Nama;
+    SELECT m.Nama, COUNT(am.AktivitasMahasiswa_ID) * 50000 AS Insentif
+    FROM Mahasiswa m
+    JOIN AktivitasMahasiswa_Mahasiswa amm ON m.Mahasiswa_ID = amm.Mahasiswa_ID
+    JOIN AktivitasMahasiswa am ON amm.AktivitasMahasiswa_ID = am.AktivitasMahasiswa_ID
+    WHERE am.Verifikasi = 'ACC'
+    GROUP BY m.Nama;
 END;
 $$ LANGUAGE plpgsql;
-SELECT * FROM CalculateIncentive();
+
+-- Jalankan fungsi tersebut
+SELECT * FROM bigint_insentif();
